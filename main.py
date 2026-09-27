@@ -1,6 +1,8 @@
 import os
 import sys
 
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 
 def _bootstrap_cli() -> None:
     import argparse
@@ -23,12 +25,12 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, Callable, Optional
 import secrets
-import torch
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse, Response
 from stable_audio_tools import get_pretrained_model
 from audio_generator import AudioGenerator
+from device_utils import apply_mps_patches, describe_device, get_device
 from models import AudioProcessRequest
 from sa3_generator import StableAudio3Generator
 from sa_generator import StableAudioGenerator
@@ -231,13 +233,19 @@ async def root() -> str:
 
 if __name__ == "__main__":
 
-    if not torch.cuda.is_available():
-        print("❌ No CUDA GPU detected. CPU mode is not allowed in the GPU Server")
+    device = get_device()
+    if device is None:
+        print(
+            "❌ No supported GPU detected (NVIDIA CUDA or Apple Silicon MPS). "
+            "CPU mode is not allowed in the GPU Server"
+        )
         sys.exit(1)
+    apply_mps_patches()
 
     print(f"\n{'=' * 55}")
     print("  OBSIDIAN Neural GPU Server")
     print(f"  Host   : {HOST}:{PORT}")
+    print(f"  Device : {describe_device(device)}")
     print(f"{'=' * 55}\n")
 
     uvicorn.run(app, host=HOST, port=PORT, log_level="info", backlog=2048)

@@ -1,5 +1,4 @@
 import threading
-import gc
 import time
 from typing import Optional
 import torch
@@ -14,6 +13,7 @@ from transformers import (
 )
 from settings import SUPPORTED_MODELS, TARGET_SAMPLE_RATE, MIN_DURATION
 from base_generator import Generator
+from device_utils import free_device_memory, get_dtype, require_device
 
 
 class AudioGenerator(Generator):
@@ -23,7 +23,7 @@ class AudioGenerator(Generator):
         self.model_id = SUPPORTED_MODELS[model_key]
         self.pipeline = None
         self.sample_rate = TARGET_SAMPLE_RATE
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = require_device().type
         self._lock = threading.Lock()
         self._generating = False
 
@@ -51,8 +51,14 @@ class AudioGenerator(Generator):
                 torch_dtype=torch.float16,
                 device_map="balanced",
             )
+        elif self.device == "mps":
+            self.pipeline = StableAudioPipeline.from_pretrained(
+                self.model_id,
+                torch_dtype=get_dtype(torch.device("mps")),
+                low_cpu_mem_usage=True,
+            ).to("mps")
         else:
-            raise RuntimeError("No CUDA GPU available. CPU mode is not allowed.")
+            raise RuntimeError("No supported GPU available. CPU mode is not allowed.")
 
         self.sample_rate = self.pipeline.vae.sampling_rate
         print(f"✅ Model loaded (sample rate: {self.sample_rate}Hz)")
@@ -71,19 +77,7 @@ class AudioGenerator(Generator):
                 pass
         self.pipeline = None
 
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-            torch.cuda.empty_cache()
-            torch.cuda.ipc_collect()
-        gc.collect()
-
-        try:
-            import ctypes
-
-            libc = ctypes.CDLL("libc.so.6")
-            libc.malloc_trim(0)
-        except Exception:
-            pass
+        free_device_memory()
 
     def generate_with_seed(
         self,
@@ -127,7 +121,8 @@ class AudioGenerator(Generator):
             if bpm:
                 final_prompt += f", {bpm} BPM"
 
-            gen = torch.Generator(device=self.device).manual_seed(seed)
+            generator_device = "cpu" if self.device == "mps" else self.device
+            gen = torch.Generator(device=generator_device).manual_seed(seed)
             print(f"Stable audio open 1.0 prompt: {final_prompt}")
             t0 = time.time()
 

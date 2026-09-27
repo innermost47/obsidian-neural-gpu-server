@@ -4,12 +4,12 @@ import time
 import json
 import math
 import torch
-import gc
 from huggingface_hub import hf_hub_download
 from stable_audio_tools.inference.generation import generate_diffusion_cond
 from stable_audio_tools.models.factory import create_model_from_config
 from stable_audio_tools.models.utils import load_ckpt_state_dict
 from base_generator import Generator
+from device_utils import free_device_memory, get_dtype, require_device
 from settings import FORCED_75_STEPS_MODELS
 
 
@@ -43,12 +43,8 @@ class StableAudioGenerator(Generator):
         self, prompt: str, bpm: int, bars: int, key: Optional[str], seed: int
     ) -> bytes:
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        dtype = (
-            torch.bfloat16
-            if (device.type == "cuda" and torch.cuda.is_bf16_supported())
-            else torch.float16
-        )
+        device = require_device()
+        dtype = get_dtype(device, prefer_bf16=True)
 
         ckpt_path = hf_hub_download(repo_id=self.repo_id, filename=self.ckpt_filename)
         config_path = hf_hub_download(
@@ -152,16 +148,4 @@ class StableAudioGenerator(Generator):
                 del state_dict
             except NameError:
                 pass
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-                torch.cuda.empty_cache()
-                torch.cuda.ipc_collect()
-            gc.collect()
-
-            try:
-                import ctypes
-
-                libc = ctypes.CDLL("libc.so.6")
-                libc.malloc_trim(0)
-            except Exception:
-                pass
+            free_device_memory()

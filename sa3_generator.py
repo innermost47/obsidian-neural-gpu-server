@@ -2,10 +2,10 @@ import threading
 from typing import Optional
 import time
 import torch
-import gc
 from stable_audio_tools import get_pretrained_model
 from stable_audio_tools.inference.generation import generate_diffusion_cond_inpaint
 from base_generator import Generator
+from device_utils import free_device_memory, get_dtype, require_device
 from settings import MIN_DURATION, MAX_DURATION, SA3_KEEP_IN_RAM
 
 
@@ -44,8 +44,8 @@ class StableAudio3Generator(Generator):
         key: Optional[str] = None,
     ) -> bytes:
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        use_half = device.type == "cuda"
+        device = require_device()
+        dtype = get_dtype(device)
 
         if not prompt or not prompt.strip():
             raise ValueError("prompt cannot be None or empty")
@@ -61,18 +61,14 @@ class StableAudio3Generator(Generator):
                 print(f"♻️  SA3 cache hit (RAM → GPU)")
                 model = self._cached_model
                 model_config = self._cached_config
-                model.to(device)
-                if use_half:
-                    model = model.to(torch.float16)
+                model = model.to(device).to(dtype)
             else:
                 print(f"⚡ Loading {self.repo_id} (SA3) on {device}...")
                 model, model_config = get_pretrained_model(self.repo_id)
                 if SA3_KEEP_IN_RAM:
                     self._cached_model = model
                     self._cached_config = model_config
-                model = model.to(device)
-                if use_half:
-                    model = model.to(torch.float16)
+                model = model.to(device).to(dtype)
 
             sample_rate = model_config["sample_rate"]
             sample_size = model_config["sample_size"]
@@ -128,16 +124,4 @@ class StableAudio3Generator(Generator):
                         del model
                 except Exception:
                     pass
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-                torch.cuda.empty_cache()
-                torch.cuda.ipc_collect()
-            gc.collect()
-
-            try:
-                import ctypes
-
-                libc = ctypes.CDLL("libc.so.6")
-                libc.malloc_trim(0)
-            except Exception:
-                pass
+            free_device_memory()
